@@ -1,0 +1,12 @@
+Conceive an image about ONE sheep based on these three emotions: EMOTIONS_PLACEHOLDER.
+Use no more than three main elements. Express emotions through shapes, posture, or spatial relations. Avoid narrative and common celestial motifs such as cliffs, stars, or the moon. Explore geometric forms, plant-like growth, mechanical fragments, or abstract shadows. The drawing must work in pure black lines without color.
+
+In the private detail field, describe the imagined image using poetic, unfamiliar metaphors. In the public feedback field, give a very concise first instruction with simple vocabulary and room for human interpretation. Do not disclose the full scene.
+
+Return:
+{
+  "detail": "Private description of the imagined image",
+  "is_satisfied": false,
+  "feedback": ["Draw me a sheep.", "Short scene instruction", "Short sheep feature instruction"]
+}
+The first feedback line must be exactly "Draw me a sheep.".

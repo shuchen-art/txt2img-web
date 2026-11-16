@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#ffffff">
+  <meta name="description" content="txt2img⁻¹">
+  <title>txt2img⁻¹</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="preload" href="/static/fonts/PTMono-Regular.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <div class="page">
+    <header class="masthead">
+      <img class="wordmark" src="/static/logo.svg" width="160" height="46" alt="txt2img inverse">
+    </header>
+    <main aria-label="Drawing session">
+      <div id="record" aria-label="Session record"></div>
+      <div id="editor" hidden>
+        <div class="drawing-frame">
+          <canvas id="canvas" width="960" height="960" tabindex="0" aria-label="Draw with a mouse, touch, or pen.">This experience requires Canvas support.</canvas>
+        </div>
+      </div>
+      <p id="error" class="error" role="alert" hidden></p>
+      <div id="controls" class="controls start">
+        <div id="tools" class="tools" hidden>
+          <button id="undo" class="tool-button" type="button" hidden>Undo</button>
+          <button id="clear" class="tool-button" type="button" hidden>Clear</button>
+          <button id="download" class="tool-button" type="button" hidden>Save drawing</button>
+        </div>
+        <button id="primary" class="primary-button" type="button">Start</button>
+      </div>
+      <p id="announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
+    </main>
+    <noscript><p class="error">Please enable JavaScript to draw.</p></noscript>
+  </div>
+</body>
+</html>

@@ -1,0 +1,15 @@
+This is the fourth and final submission. Evaluate it against your original imagined scene:
+SCENE_PLACEHOLDER
+
+Privately score accuracy and aesthetic from 0 to 10 (integers). Accuracy measures composition, narrative, and emotions; aesthetic measures visual quality.
+Accept if either score is >= 3. Reject only if both scores are < 3. The session ends either way.
+
+Return JSON:
+{
+  "detail": "accuracy: integer, aesthetic: integer",
+  "is_satisfied": true or false,
+  "feedback": ["line 1", "line 2", "line 3"]
+}
+If accepted: line 1 is "Your drawing is accepted."; lines 2 and 3 give brief, neutral observations, without praise.
+If rejected: line 1 states that the attempt limit is reached; line 2 briefly summarizes the drawings; line 3 must be "Process terminated.".
+Do not issue further drawing instructions. Use short lines, preferably <= 30 characters. Never put numerical scores or the full imagined scene in feedback.

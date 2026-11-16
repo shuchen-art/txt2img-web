@@ -1,0 +1,255 @@
+"""Single-process, memory-only web terminal. Run with `python run.py`."""
+
+import asyncio
+import base64
+import binascii
+from contextlib import asynccontextmanager, suppress
+from dataclasses import dataclass, field
+import hashlib
+from io import BytesIO
+import logging
+import os
+from pathlib import Path
+import secrets
+import time
+from typing import Literal
+from uuid import UUID
+
+from dotenv import load_dotenv
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
+from PIL import Image, UnidentifiedImageError
+from pydantic import BaseModel, ConfigDict, Field
+
+from ai_service import AIError, DeepSeekAI, UnavailableAI
+
+ROOT = Path(__file__).resolve().parent
+MAX_PNG_BYTES = 2 * 1024 * 1024
+MAX_BODY_BYTES = 3 * 1024 * 1024
+SESSION_TTL = 30 * 60
+AI_TIMEOUT = 45
+logger = logging.getLogger(__name__)
+
+
+class APIError(Exception):
+    def __init__(self, code, message, status=400):
+        self.code, self.message, self.status = code, message, status
+
+
+class DrawingSubmission(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    submission_id: UUID
+    round: int = Field(ge=1, le=4, strict=True)
+    image_base64: str = Field(min_length=1, max_length=(MAX_PNG_BYTES + 2) // 3 * 4)
+
+
+class StartResponse(BaseModel):
+    session_id: str
+    round: int = 1
+    instructions: list[str]
+
+
+class VerdictResponse(BaseModel):
+    round: int
+    next_round: int | None
+    state: Literal["retry", "accepted", "terminated"]
+    feedback: list[str]
+
+
+@dataclass
+class Session:
+    vision: str
+    history: tuple
+    last_activity: float
+    round: int = 1
+    finished: bool = False
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    results: dict = field(default_factory=dict)
+
+
+def decode_drawing(encoded: str) -> bytes:
+    try:
+        data = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error):
+        raise APIError("invalid_image", "Submit a valid PNG drawing.") from None
+    if len(data) > MAX_PNG_BYTES:
+        raise APIError("image_too_large", "The drawing is too large to submit.", 413)
+    try:
+        with Image.open(BytesIO(data)) as source:
+            if source.format != "PNG" or source.is_animated:
+                raise APIError("invalid_image", "Submit a single PNG drawing.")
+            if min(source.size) < 16 or max(source.size) > 2048:
+                raise APIError("invalid_dimensions", "The drawing dimensions are not supported.")
+            source.verify()
+        with Image.open(BytesIO(data)) as source:
+            rgba = source.convert("RGBA")
+            background = Image.new("RGBA", rgba.size, "white")
+            image = Image.alpha_composite(background, rgba).convert("RGB")
+        if image.convert("L").getextrema()[0] >= 245:
+            raise APIError("blank_drawing", "Make a mark before submitting.")
+        output = BytesIO()
+        image.save(output, format="PNG")
+        return output.getvalue()
+    except APIError:
+        raise
+    except (UnidentifiedImageError, OSError, ValueError, SyntaxError, Image.DecompressionBombError):
+        raise APIError("invalid_image", "The drawing could not be read. Please try again.") from None
+
+
+class LimitBodyMiddleware:
+    """Bound input before JSON decoding, including requests with no Content-Length."""
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or not scope["path"].startswith("/api/"):
+            return await self.app(scope, receive, send)
+        chunks, total = [], 0
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return
+            total += len(message.get("body", b""))
+            if total > MAX_BODY_BYTES:
+                response = JSONResponse({"error": {"code": "request_too_large", "message": "The drawing is too large to submit."}}, status_code=413)
+                return await response(scope, receive, send)
+            chunks.append(message)
+            if not message.get("more_body", False):
+                break
+
+        async def replay():
+            return chunks.pop(0) if chunks else await receive()
+        await self.app(scope, replay, send)
+
+
+def create_app(engine=None, *, clock=time.monotonic, ttl=SESSION_TTL, ai_timeout=AI_TIMEOUT):
+    sessions: dict[str, Session] = {}
+    if engine is None:
+        load_dotenv(ROOT / ".env")
+        key = os.getenv("DS_API_KEY", "").strip() or os.getenv("DEEPSEEK_API_KEY", "").strip()
+        model = os.getenv("DEEPSEEK_MODEL", "").strip() or "deepseek-flash"
+        engine = DeepSeekAI(key, model) if key else UnavailableAI()
+
+    def purge():
+        now = clock()
+        for sid, session in list(sessions.items()):
+            if not session.lock.locked() and now - session.last_activity >= ttl:
+                sessions.pop(sid, None)
+
+    async def cleanup_loop():
+        while True:
+            await asyncio.sleep(60)
+            purge()
+
+    @asynccontextmanager
+    async def lifespan(app):
+        cleanup = asyncio.create_task(cleanup_loop())
+        try:
+            yield
+        finally:
+            cleanup.cancel()
+            with suppress(asyncio.CancelledError):
+                await cleanup
+            sessions.clear()
+            await engine.aclose()
+
+    app = FastAPI(title="txt2img⁻¹", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    app.add_middleware(LimitBodyMiddleware)
+
+    @app.middleware("http")
+    async def headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+        return response
+
+    async def error_response(request, exc):
+        return JSONResponse({"error": {"code": exc.code, "message": exc.message}}, status_code=exc.status)
+
+    app.add_exception_handler(APIError, error_response)
+    app.add_exception_handler(AIError, error_response)
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(request, exc):
+        return JSONResponse({"error": {"code": "invalid_request", "message": "The submission could not be read. Please try again."}}, status_code=422)
+
+    async def call_ai(awaitable):
+        try:
+            async with asyncio.timeout(ai_timeout):
+                return await awaitable
+        except TimeoutError:
+            raise APIError("ai_timeout", "The evaluator took too long. Please try again; this attempt was not counted.", 504) from None
+
+    def get_session(sid):
+        purge()
+        if sid not in sessions:
+            raise APIError("session_expired", "This session has expired. Save your drawing, then start again.", 410)
+        return sessions[sid]
+
+    @app.post("/api/sessions", response_model=StartResponse, status_code=201)
+    async def start():
+        purge()
+        reply = await call_ai(engine.initial())
+        sid = secrets.token_urlsafe(32)
+        sessions[sid] = Session(reply.result.detail, reply.history, clock())
+        return StartResponse(session_id=sid, instructions=reply.result.feedback)
+
+    @app.post("/api/sessions/{sid}/drawings", response_model=VerdictResponse)
+    async def submit(sid: str, body: DrawingSubmission):
+        session = get_session(sid)
+        image = decode_drawing(body.image_base64)
+        fingerprint = (body.round, hashlib.sha256(image).hexdigest())
+        submission_id = str(body.submission_id)
+        if submission_id in session.results:
+            previous_fingerprint, response = session.results[submission_id]
+            if previous_fingerprint != fingerprint:
+                raise APIError("submission_conflict", "This submission has changed. Please start a new submission.", 409)
+            session.last_activity = clock()
+            return response
+        if session.lock.locked():
+            raise APIError("session_busy", "The evaluator is still reading your drawing. Please wait, then retry.", 409)
+        async with session.lock:
+            if session.finished:
+                raise APIError("session_closed", "This session is complete. Start again for a new instruction.", 409)
+            if body.round != session.round:
+                raise APIError("round_conflict", "This drawing belongs to an earlier attempt. Please start again.", 409)
+            session.last_activity = clock()
+            try:
+                reply = await call_ai(engine.evaluate(
+                    history=session.history, vision=session.vision, image=image, round_number=session.round,
+                ))
+            finally:
+                session.last_activity = clock()
+            satisfied = reply.result.is_satisfied
+            state = "accepted" if satisfied else "terminated" if session.round == 4 else "retry"
+            feedback = list(reply.result.feedback)
+            if state == "retry" and session.round == 3:
+                feedback[-1] = "This is your last try."
+            response = VerdictResponse(round=session.round, next_round=session.round + 1 if state == "retry" else None,
+                                       state=state, feedback=feedback)
+            # Commit only after a complete, validated response. Failures leave history and round untouched.
+            session.history = reply.history
+            session.results[submission_id] = (fingerprint, response)
+            session.finished = state != "retry"
+            if not session.finished:
+                session.round += 1
+            return response
+
+    @app.delete("/api/sessions/{sid}", status_code=204)
+    async def delete(sid: str):
+        session = sessions.get(sid)
+        if session and session.lock.locked():
+            raise APIError("session_busy", "The evaluator is still working. Please wait, then retry.", 409)
+        sessions.pop(sid, None)
+        return Response(status_code=204)
+
+    @app.get("/", include_in_schema=False)
+    async def index():
+        return FileResponse(ROOT / "static" / "index.html")
+
+    app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
+    return app

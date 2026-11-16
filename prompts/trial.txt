@@ -1,0 +1,15 @@
+Evaluate this drawing against your original imagined scene:
+SCENE_PLACEHOLDER
+
+Privately score accuracy and aesthetic from 0 to 10 (integers). Accuracy measures composition, narrative, and emotions; aesthetic measures visual quality.
+Accept if either score is >= 4. Reject only if both scores are < 4. Apply these conditions exactly; they do not overlap.
+
+Return JSON:
+{
+  "detail": "accuracy: integer, aesthetic: integer",
+  "is_satisfied": true or false,
+  "feedback": ["line 1", "line 2", "line 3"]
+}
+If accepted: line 1 is "Your drawing is accepted."; lines 2 and 3 give brief, neutral observations, without praise or further commands.
+If rejected: line 1 starts with "You drew" and describes the actual drawing; line 2 gives one exact composition change; line 3 gives one exact change to express the target emotion. Do not repeat earlier instructions. Each line should be <= 30 characters.
+Never put numerical scores or the full imagined scene in feedback.
