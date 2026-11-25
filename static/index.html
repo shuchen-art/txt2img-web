@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#ffffff">
-  <meta name="description" content="txt2img⁻¹">
-  <title>txt2img⁻¹</title>
+  <meta name="theme-color" content="#f7f6f1">
+  <meta name="description" content="txt2img⁻¹-web">
+  <title>txt2img⁻¹-web</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="preload" href="/static/fonts/PTMono-Regular.ttf" as="font" type="font/ttf" crossorigin>
   <link rel="stylesheet" href="/static/style.css">
@@ -13,27 +13,83 @@
 </head>
 <body>
   <div class="page">
-    <header class="masthead">
-      <img class="wordmark" src="/static/logo.svg" width="160" height="46" alt="txt2img inverse">
-    </header>
-    <main aria-label="Drawing session">
-      <div id="record" aria-label="Session record"></div>
-      <div id="editor" hidden>
-        <div class="drawing-frame">
-          <canvas id="canvas" width="960" height="960" tabindex="0" aria-label="Draw with a mouse, touch, or pen.">This experience requires Canvas support.</canvas>
-        </div>
+    <header class="zone-a">
+      <div class="double-rule" aria-hidden="true">
+        <div class="divider divider-solid-2"></div>
+        <div class="divider divider-solid-1"></div>
       </div>
+      <div class="masthead-row">
+        <h1 class="wordmark" aria-label="txt2img inverse web">
+          <span class="wordmark-base" aria-hidden="true">txt2img</span><span class="wordmark-sup" aria-hidden="true">-1</span><span class="wordmark-base" aria-hidden="true">-web</span>
+        </h1>
+      </div>
+      <div class="divider divider-solid-1" aria-hidden="true"></div>
+      <dl class="meta-list" aria-label="Session metadata">
+        <div class="meta-row">
+          <dt class="meta-label">MODEL_ID</dt>
+          <dd id="meta-model" class="meta-value">UNVERIFIED</dd>
+        </div>
+        <div class="meta-row">
+          <dt class="meta-label">DATE</dt>
+          <dd id="meta-date" class="meta-value">----/--/--</dd>
+        </div>
+      </dl>
+      <div class="divider divider-solid-2" aria-hidden="true"></div>
+    </header>
+
+    <main class="receipt-main" aria-label="Drawing session">
+      <div id="record" class="zone-b" aria-label="Session record" hidden></div>
+
+      <section id="settlement" class="zone-c" aria-label="Final verdict and settlement" hidden>
+        <div class="divider divider-solid-2" aria-hidden="true"></div>
+        <div class="verdict-banner">
+          <span id="verdict-title" class="verdict-title">VERDICT // ACCEPTED</span>
+          <span id="verdict-badge" class="verdict-badge">[ PASS ]</span>
+        </div>
+        <div class="prompt-section">
+          <p class="command-label">&gt; ai.verdict(final)</p>
+          <div id="verdict-body" class="verdict" aria-label="Final decision"></div>
+        </div>
+        <div class="divider divider-dashed" aria-hidden="true"></div>
+        <dl class="meta-list" aria-label="Settlement statistics">
+          <div class="meta-row">
+            <dt class="meta-label">TRIALS_COMPLETED</dt>
+            <dd id="stat-trials" class="meta-value">00 / 04</dd>
+          </div>
+          <div class="meta-row">
+            <dt class="meta-label">TOTAL_ELAPSED</dt>
+            <dd id="stat-elapsed" class="meta-value">00m 00s</dd>
+          </div>
+        </dl>
+      </section>
+
+      <div id="auth-box" class="auth-box">
+        <label class="command-label" for="email">&gt; auth.email</label>
+        <input id="email" class="email-input" type="email" name="email" autocomplete="email" inputmode="email" spellcheck="false" placeholder="Enter your email" required>
+      </div>
+
       <p id="error" class="error" role="alert" hidden></p>
+
       <div id="controls" class="controls start">
         <div id="tools" class="tools" hidden>
-          <button id="undo" class="tool-button" type="button" hidden>Undo</button>
-          <button id="clear" class="tool-button" type="button" hidden>Clear</button>
-          <button id="download" class="tool-button" type="button" hidden>Save drawing</button>
+          <button id="undo" class="tool-button" type="button" hidden>UNDO</button>
+          <button id="clear" class="tool-button" type="button" hidden>CLEAR</button>
         </div>
-        <button id="primary" class="primary-button" type="button">Start</button>
+        <button id="primary" class="primary-button" type="button">[ START ]</button>
       </div>
+
+      <div id="editor-dock" hidden>
+        <div id="editor" class="editor" hidden>
+          <canvas id="canvas" width="1152" height="864" tabindex="0" aria-label="Draw with a mouse, touch, or pen.">This experience requires Canvas support.</canvas>
+          <div id="placeholder" class="placeholder-guide" aria-hidden="true">
+            <p class="placeholder-plus">+</p>
+          </div>
+        </div>
+      </div>
+
       <p id="announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
     </main>
+
     <noscript><p class="error">Please enable JavaScript to draw.</p></noscript>
   </div>
 </body>

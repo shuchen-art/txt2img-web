@@ -1,6 +1,7 @@
 import asyncio
 import base64
 from io import BytesIO
+import os
 from uuid import uuid4
 
 import httpx
@@ -10,6 +11,10 @@ import pytest
 from ai_service import AIError, AIReply, Feedback, UnavailableAI
 from app import create_app
 import app as app_module
+
+DEFAULT_EMAIL = "test@example.com"
+DEFAULT_HUMAN_ID = "Human #83791"
+DEFAULT_ALLOWLIST = {DEFAULT_EMAIL: DEFAULT_HUMAN_ID}
 
 
 @pytest.fixture
@@ -62,16 +67,18 @@ def submission(round=1, **kwargs):
     return {"submission_id": str(uuid4()), "round": round, "image_base64": png(), **kwargs}
 
 
-def client(engine=None, **kwargs):
-    app = create_app(engine or FakeAI(), **kwargs)
+def client(engine=None, *, allowlist=DEFAULT_ALLOWLIST, **kwargs):
+    app = create_app(engine or FakeAI(), allowlist=allowlist, **kwargs)
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", trust_env=False)
 
 
-async def start(c):
-    response = await c.post("/api/sessions")
+async def start(c, email=DEFAULT_EMAIL):
+    response = await c.post("/api/sessions", json={"email": email})
     assert response.status_code == 201
     assert "PRIVATE" not in response.text
-    return response.json()["session_id"]
+    body = response.json()
+    assert body["model_id"]
+    return body["session_id"]
 
 
 @pytest.mark.anyio
@@ -218,17 +225,92 @@ async def test_round_order_request_size_and_validation():
 
 
 @pytest.mark.anyio
+async def test_email_allowlist_gating_normalization_and_model_id_binding():
+    engine = FakeAI()
+    async with client(engine, allowlist={"cleavcw@hkust-gz.edu.cn": "Human #83791"}) as c:
+        assert (await c.post("/api/sessions")).status_code == 422
+        denied = await c.post("/api/sessions", json={"email": "outsider@example.com"})
+        assert denied.status_code == 403 and denied.json()["error"]["code"] == "email_not_allowed"
+        assert engine.starts == 0
+
+        first = await c.post("/api/sessions", json={"email": "  CleaVCW@HKUST-GZ.EDU.CN  "})
+        assert first.status_code == 201
+        assert first.json()["model_id"] == "Human #83791"
+
+        second = await c.post("/api/sessions", json={"email": "cleavcw@hkust-gz.edu.cn"})
+        assert second.status_code == 201
+        assert second.json()["model_id"] == "Human #83791"
+        assert engine.starts == 2
+
+
+@pytest.mark.anyio
+async def test_file_allowlist_hot_reload_and_deterministic_id(tmp_path, monkeypatch):
+    allowlist_file = tmp_path / "allowlist.csv"
+    monkeypatch.setenv("ALLOWLIST_PATH", str(allowlist_file))
+    engine = FakeAI()
+    app = create_app(engine)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", trust_env=False) as c:
+            # Missing allowlist denies cleanly.
+            assert (await c.post("/api/sessions", json={"email": "cleavcw@hkust-gz.edu.cn"})).status_code == 403
+
+            allowlist_file.write_text(
+                "email,human_id\n"
+                "# comment row\n"
+                "cleavcw@hkust-gz.edu.cn,Human #83791\n"
+                "auto@example.com,\n",
+                encoding="utf-8",
+            )
+            explicit = await c.post("/api/sessions", json={"email": "cleavcw@hkust-gz.edu.cn"})
+            assert explicit.status_code == 201 and explicit.json()["model_id"] == "Human #83791"
+
+            auto1 = await c.post("/api/sessions", json={"email": "auto@example.com"})
+            auto2 = await c.post("/api/sessions", json={"email": "AUTO@EXAMPLE.COM"})
+            assert auto1.status_code == 201 and auto2.status_code == 201
+            assert auto1.json()["model_id"] == auto2.json()["model_id"]
+            assert auto1.json()["model_id"].startswith("Human #")
+
+            # Hot-reload after editing CSV without recreating app.
+            allowlist_file.write_text("email,human_id\ncleavcw@hkust-gz.edu.cn,Human #99999\n", encoding="utf-8")
+            stat = allowlist_file.stat()
+            os.utime(allowlist_file, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
+            updated = await c.post("/api/sessions", json={"email": "cleavcw@hkust-gz.edu.cn"})
+            assert updated.status_code == 201 and updated.json()["model_id"] == "Human #99999"
+            assert (await c.post("/api/sessions", json={"email": "auto@example.com"})).status_code == 403
+
+
+@pytest.mark.anyio
+async def test_session_ownership_enforced_across_clients():
+    engine = FakeAI()
+    app = create_app(engine, allowlist=DEFAULT_ALLOWLIST)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test", trust_env=False) as owner, \
+                httpx.AsyncClient(transport=transport, base_url="http://test", trust_env=False) as intruder:
+            sid = await start(owner)
+            bad_submit = await intruder.post(f"/api/sessions/{sid}/drawings", json=submission())
+            assert bad_submit.status_code == 403 and bad_submit.json()["error"]["code"] == "unauthorized_session"
+            bad_delete = await intruder.delete(f"/api/sessions/{sid}")
+            assert bad_delete.status_code == 403 and bad_delete.json()["error"]["code"] == "unauthorized_session"
+            assert (await owner.post(f"/api/sessions/{sid}/drawings", json=submission())).status_code == 200
+            assert (await owner.delete(f"/api/sessions/{sid}")).status_code == 204
+
+
+@pytest.mark.anyio
 async def test_static_page_and_missing_key_are_explicit():
     async with client(UnavailableAI()) as c:
         page = await c.get("/")
-        assert page.status_code == 200 and '<title>txt2img⁻¹</title>' in page.text
-        assert 'id="record"' in page.text and 'src="/static/logo.svg"' in page.text
+        assert page.status_code == 200 and '<title>txt2img⁻¹-web</title>' in page.text
+        assert 'id="record"' in page.text and 'width="1152" height="864"' in page.text
+        assert 'id="email"' in page.text and 'UNVERIFIED' in page.text
+        for removed in ("SESSION LOG", "SESSION_REF", "ARCHIVE_STATE", "SAVE PNG", "END OF RECEIPT"):
+            assert removed not in page.text
         assert "The machine imagines." not in page.text
         for asset in ("logo.svg", "fonts/PTMono-Regular.ttf", "fonts/OFL.txt"):
             assert (await c.get(f"/static/{asset}")).status_code == 200
         assert (await c.get("/static/app.js")).status_code == 200
         assert (await c.get("/static/../.env")).status_code == 404
-        error = await c.post("/api/sessions")
+        error = await c.post("/api/sessions", json={"email": DEFAULT_EMAIL})
         assert error.status_code == 503 and error.json()["error"]["code"] == "ai_not_configured"
         assert "API_KEY" not in error.text
 
@@ -241,11 +323,14 @@ async def test_static_page_and_missing_key_are_explicit():
     (" ", "standard-test", " ", "standard-test", "deepseek-flash"),
     ("", "", "", None, None),
 ])
-async def test_deepseek_environment_configuration(monkeypatch, ds_key, standard_key, model, expected_key, expected_model):
+async def test_deepseek_environment_configuration(tmp_path, monkeypatch, ds_key, standard_key, model, expected_key, expected_model):
+    allowlist_file = tmp_path / "allowlist.csv"
+    allowlist_file.write_text("email,human_id\nenv@example.com,Human #83791\n", encoding="utf-8")
     monkeypatch.setattr(app_module, "load_dotenv", lambda path: None)
     monkeypatch.setenv("DS_API_KEY", ds_key)
     monkeypatch.setenv("DEEPSEEK_API_KEY", standard_key)
     monkeypatch.setenv("DEEPSEEK_MODEL", model)
+    monkeypatch.setenv("ALLOWLIST_PATH", str(allowlist_file))
     monkeypatch.setenv("GOOGLE_API_KEY", "old-provider-key-must-not-be-used")
     constructed = []
     def factory(key, selected_model):
@@ -255,6 +340,6 @@ async def test_deepseek_environment_configuration(monkeypatch, ds_key, standard_
     app = create_app()
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", trust_env=False) as c:
-            response = await c.post("/api/sessions")
+            response = await c.post("/api/sessions", json={"email": "env@example.com"})
             assert response.status_code == (201 if expected_key else 503)
     assert constructed == ([(expected_key, expected_model)] if expected_key else [])

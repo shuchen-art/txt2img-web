@@ -1,5 +1,6 @@
 .venv/
 .env
+allowlist.csv
 __pycache__/
 .pytest_cache/
 *.pyc

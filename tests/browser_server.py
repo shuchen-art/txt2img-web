@@ -49,7 +49,7 @@ def build(scenario="default"):
         nonlocal dropped
         if request.url.path == "/":
             html = (ROOT / "static/index.html").read_text()
-            html = html.replace("<body>", f'<body><p class="noscript">TEST FIXTURE — no live AI. Scenario: {scenario}. First session terminates; second accepts.</p>')
+            html = html.replace("<body>", f'<body><p class="noscript">TEST FIXTURE — no live AI. Scenario: {scenario}. First session terminates; second accepts. Allowlist: allowlist.csv (cleavcw@hkust-gz.edu.cn).</p>')
             return HTMLResponse(html)
         is_submission = request.method == "POST" and request.url.path.endswith("/drawings")
         if is_submission and scenario == "expired":

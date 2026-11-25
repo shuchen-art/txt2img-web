@@ -34,11 +34,11 @@ def sample_drawing(number):
 
 
 async def check():
-    app = create_app()
+    app = create_app(allowlist={"live@local.test": "Human #00000"})
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", trust_env=False) as client:
             started = time.monotonic()
-            response = await client.post("/api/sessions")
+            response = await client.post("/api/sessions", json={"email": "live@local.test"})
             print("Start:", response.status_code, "elapsed:", round(time.monotonic() - started, 1), "s", flush=True)
             if response.status_code != 201:
                 print("Error:", response.json().get("error", {}).get("code"), flush=True)

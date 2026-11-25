@@ -4,6 +4,7 @@ import asyncio
 import base64
 import binascii
 from contextlib import asynccontextmanager, suppress
+import csv
 from dataclasses import dataclass, field
 import hashlib
 from io import BytesIO
@@ -30,12 +31,89 @@ MAX_PNG_BYTES = 2 * 1024 * 1024
 MAX_BODY_BYTES = 3 * 1024 * 1024
 SESSION_TTL = 30 * 60
 AI_TIMEOUT = 45
+AUTH_COOKIE = "txt2img_auth"
 logger = logging.getLogger(__name__)
 
 
 class APIError(Exception):
     def __init__(self, code, message, status=400):
         self.code, self.message, self.status = code, message, status
+
+
+def normalize_email(email: str) -> str:
+    return email.strip().lower()
+
+
+def derive_human_id(normalized_email: str) -> str:
+    digest = hashlib.sha256(normalized_email.encode("utf-8")).digest()
+    number = 10000 + (int.from_bytes(digest[:4], "big") % 90000)
+    return f"Human #{number}"
+
+
+class Allowlist:
+    def resolve(self, email: str) -> str | None:
+        raise NotImplementedError
+
+
+class StaticAllowlist(Allowlist):
+    def __init__(self, entries: dict[str, str]):
+        self.entries: dict[str, str] = {}
+        for email, human_id in entries.items():
+            normalized = normalize_email(email)
+            if not normalized:
+                continue
+            cleaned_id = human_id.strip() if human_id else ""
+            self.entries[normalized] = cleaned_id or derive_human_id(normalized)
+
+    def resolve(self, email: str) -> str | None:
+        return self.entries.get(normalize_email(email))
+
+
+class FileAllowlist(Allowlist):
+    """Local CSV allowlist (`email,human_id`) with automatic mtime hot-reload."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self._signature: tuple[int, int] | None = None
+        self._entries: dict[str, str] = {}
+
+    def _reload_if_changed(self) -> None:
+        try:
+            stat = self.path.stat()
+        except OSError:
+            self._signature = None
+            self._entries = {}
+            return
+        signature = (stat.st_mtime_ns, stat.st_size)
+        if signature == self._signature:
+            return
+        entries: dict[str, str] = {}
+        try:
+            with self.path.open("r", encoding="utf-8", newline="") as handle:
+                for row in csv.reader(handle):
+                    if not row:
+                        continue
+                    raw_email = row[0].strip()
+                    if not raw_email or raw_email.startswith("#"):
+                        continue
+                    lowered = raw_email.lower()
+                    if lowered == "email" and (len(row) < 2 or row[1].strip().lower() in ("", "human_id", "model_id")):
+                        continue
+                    raw_id = row[1].strip() if len(row) > 1 else ""
+                    entries[lowered] = raw_id or derive_human_id(lowered)
+        except OSError:
+            entries = {}
+        self._signature = signature
+        self._entries = entries
+
+    def resolve(self, email: str) -> str | None:
+        self._reload_if_changed()
+        return self._entries.get(normalize_email(email))
+
+
+class StartRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    email: str = Field(min_length=1, max_length=254)
 
 
 class DrawingSubmission(BaseModel):
@@ -47,6 +125,7 @@ class DrawingSubmission(BaseModel):
 
 class StartResponse(BaseModel):
     session_id: str
+    model_id: str
     round: int = 1
     instructions: list[str]
 
@@ -63,6 +142,9 @@ class Session:
     vision: str
     history: tuple
     last_activity: float
+    email: str
+    model_id: str
+    owner_token: str
     round: int = 1
     finished: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -124,13 +206,24 @@ class LimitBodyMiddleware:
         await self.app(scope, replay, send)
 
 
-def create_app(engine=None, *, clock=time.monotonic, ttl=SESSION_TTL, ai_timeout=AI_TIMEOUT):
+def create_app(engine=None, *, clock=time.monotonic, ttl=SESSION_TTL, ai_timeout=AI_TIMEOUT, allowlist=None):
     sessions: dict[str, Session] = {}
-    if engine is None:
+    if engine is None or allowlist is None:
         load_dotenv(ROOT / ".env")
+    if engine is None:
         key = os.getenv("DS_API_KEY", "").strip() or os.getenv("DEEPSEEK_API_KEY", "").strip()
         model = os.getenv("DEEPSEEK_MODEL", "").strip() or "deepseek-flash"
         engine = DeepSeekAI(key, model) if key else UnavailableAI()
+    if allowlist is None:
+        raw_path = os.getenv("ALLOWLIST_PATH", "").strip()
+        allowlist_path = Path(raw_path) if raw_path else ROOT / "allowlist.csv"
+        if not allowlist_path.is_absolute():
+            allowlist_path = ROOT / allowlist_path
+        gate: Allowlist = FileAllowlist(allowlist_path)
+    elif isinstance(allowlist, Allowlist):
+        gate = allowlist
+    else:
+        gate = StaticAllowlist(allowlist)
 
     def purge():
         now = clock()
@@ -155,7 +248,7 @@ def create_app(engine=None, *, clock=time.monotonic, ttl=SESSION_TTL, ai_timeout
             sessions.clear()
             await engine.aclose()
 
-    app = FastAPI(title="txt2img⁻¹", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="txt2img⁻¹-web", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(LimitBodyMiddleware)
 
     @app.middleware("http")
@@ -184,23 +277,48 @@ def create_app(engine=None, *, clock=time.monotonic, ttl=SESSION_TTL, ai_timeout
         except TimeoutError:
             raise APIError("ai_timeout", "The evaluator took too long. Please try again; this attempt was not counted.", 504) from None
 
-    def get_session(sid):
+    def get_session(sid: str, request: Request) -> Session:
         purge()
         if sid not in sessions:
-            raise APIError("session_expired", "This session has expired. Save your drawing, then start again.", 410)
-        return sessions[sid]
+            raise APIError("session_expired", "This session has expired. Please start again.", 410)
+        session = sessions[sid]
+        token = request.cookies.get(AUTH_COOKIE)
+        if not token or not secrets.compare_digest(token, session.owner_token):
+            raise APIError("unauthorized_session", "Session access denied.", 403)
+        return session
 
     @app.post("/api/sessions", response_model=StartResponse, status_code=201)
-    async def start():
+    async def start(body: StartRequest, request: Request, response: Response):
         purge()
+        normalized = normalize_email(body.email)
+        model_id = gate.resolve(normalized)
+        if not model_id:
+            raise APIError("email_not_allowed", "Access denied. This email is not on the allowlist.", 403)
         reply = await call_ai(engine.initial())
+        existing_token = request.cookies.get(AUTH_COOKIE)
+        token = existing_token if existing_token else secrets.token_urlsafe(32)
         sid = secrets.token_urlsafe(32)
-        sessions[sid] = Session(reply.result.detail, reply.history, clock())
-        return StartResponse(session_id=sid, instructions=reply.result.feedback)
+        sessions[sid] = Session(
+            vision=reply.result.detail,
+            history=reply.history,
+            last_activity=clock(),
+            email=normalized,
+            model_id=model_id,
+            owner_token=token,
+        )
+        if not existing_token:
+            response.set_cookie(
+                key=AUTH_COOKIE,
+                value=token,
+                httponly=True,
+                samesite="strict",
+                path="/api",
+            )
+        return StartResponse(session_id=sid, model_id=model_id, instructions=reply.result.feedback)
 
     @app.post("/api/sessions/{sid}/drawings", response_model=VerdictResponse)
-    async def submit(sid: str, body: DrawingSubmission):
-        session = get_session(sid)
+    async def submit(sid: str, body: DrawingSubmission, request: Request):
+        session = get_session(sid, request)
         image = decode_drawing(body.image_base64)
         fingerprint = (body.round, hashlib.sha256(image).hexdigest())
         submission_id = str(body.submission_id)
@@ -240,10 +358,14 @@ def create_app(engine=None, *, clock=time.monotonic, ttl=SESSION_TTL, ai_timeout
             return response
 
     @app.delete("/api/sessions/{sid}", status_code=204)
-    async def delete(sid: str):
+    async def delete(sid: str, request: Request):
         session = sessions.get(sid)
-        if session and session.lock.locked():
-            raise APIError("session_busy", "The evaluator is still working. Please wait, then retry.", 409)
+        if session:
+            token = request.cookies.get(AUTH_COOKIE)
+            if not token or not secrets.compare_digest(token, session.owner_token):
+                raise APIError("unauthorized_session", "Session access denied.", 403)
+            if session.lock.locked():
+                raise APIError("session_busy", "The evaluator is still working. Please wait, then retry.", 409)
         sessions.pop(sid, None)
         return Response(status_code=204)
 
