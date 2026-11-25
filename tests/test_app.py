@@ -297,6 +297,38 @@ async def test_session_ownership_enforced_across_clients():
 
 
 @pytest.mark.anyio
+async def test_bearer_token_auth_without_cookies():
+    engine = FakeAI()
+    app = create_app(engine, allowlist=DEFAULT_ALLOWLIST)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test", trust_env=False) as starter, \
+                httpx.AsyncClient(transport=transport, base_url="http://test", trust_env=False) as bearer_client:
+            started = await starter.post("/api/sessions", json={"email": DEFAULT_EMAIL})
+            assert started.status_code == 201
+            sid = started.json()["session_id"]
+            token = started.json()["owner_token"]
+            assert token
+            wrong = await bearer_client.post(
+                f"/api/sessions/{sid}/drawings",
+                json=submission(),
+                headers={"Authorization": "Bearer wrong-token"},
+            )
+            assert wrong.status_code == 403
+            ok = await bearer_client.post(
+                f"/api/sessions/{sid}/drawings",
+                json=submission(),
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert ok.status_code == 200
+            deleted = await bearer_client.delete(
+                f"/api/sessions/{sid}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert deleted.status_code == 204
+
+
+@pytest.mark.anyio
 async def test_static_page_and_missing_key_are_explicit():
     async with client(UnavailableAI()) as c:
         page = await c.get("/")
@@ -306,10 +338,11 @@ async def test_static_page_and_missing_key_are_explicit():
         for removed in ("SESSION LOG", "SESSION_REF", "ARCHIVE_STATE", "SAVE PNG", "END OF RECEIPT"):
             assert removed not in page.text
         assert "The machine imagines." not in page.text
-        for asset in ("logo.svg", "fonts/PTMono-Regular.ttf", "fonts/OFL.txt"):
+        for asset in ("logo.svg", "fonts/PTMono-Regular.ttf", "fonts/OFL.txt", "config.js", "style.css", "app.js"):
             assert (await c.get(f"/static/{asset}")).status_code == 200
-        assert (await c.get("/static/app.js")).status_code == 200
+            assert (await c.get(f"/{asset}")).status_code == 200
         assert (await c.get("/static/../.env")).status_code == 404
+        assert (await c.get("/../.env")).status_code == 404
         error = await c.post("/api/sessions", json={"email": DEFAULT_EMAIL})
         assert error.status_code == 503 and error.json()["error"]["code"] == "ai_not_configured"
         assert "API_KEY" not in error.text

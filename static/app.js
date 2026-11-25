@@ -27,12 +27,17 @@ function formatDuration(ms) {
   return `${pad2(minutes)}m ${pad2(seconds)}s`;
 }
 
+const isLocalHost = ["127.0.0.1", "localhost", "::1"].includes(window.location.hostname);
+const configuredApiBase = (window.TXT2IMG_CONFIG?.apiBase || "").trim().replace(/\/+$/, "");
+const API_BASE = isLocalHost ? "" : configuredApiBase;
+
 const ui = {
   mode: "ready",
   session: null,
   sessionStartedAt: null,
   email: emailInput.value.trim(),
   authenticated: false,
+  ownerToken: "",
   modelId: "UNVERIFIED",
   round: 1,
   strokes: [],
@@ -55,10 +60,12 @@ async function request(path, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 55_000);
   try {
-    const response = await fetch(path, {
+    const headers = { "Content-Type": "application/json", ...options.headers };
+    if (ui.ownerToken) headers.Authorization = `Bearer ${ui.ownerToken}`;
+    const response = await fetch(`${API_BASE}${path}`, {
       ...options,
       signal: controller.signal,
-      headers: { "Content-Type": "application/json", ...options.headers },
+      headers,
     });
     if (response.status === 204) return null;
     const body = await response.json();
@@ -392,6 +399,7 @@ async function start() {
     const startedAt = new Date();
     ui.session = result.session_id;
     ui.modelId = result.model_id;
+    if (result.owner_token) ui.ownerToken = result.owner_token;
     ui.authenticated = true;
     ui.sessionStartedAt = startedAt;
     updateMetadata(startedAt);
@@ -405,6 +413,7 @@ async function start() {
     ui.error = error.message;
     if (error.code === "email_not_allowed") {
       ui.authenticated = false;
+      ui.ownerToken = "";
       ui.modelId = "UNVERIFIED";
       updateMetadata(new Date());
     }

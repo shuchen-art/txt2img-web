@@ -126,6 +126,7 @@ class DrawingSubmission(BaseModel):
 class StartResponse(BaseModel):
     session_id: str
     model_id: str
+    owner_token: str
     round: int = 1
     instructions: list[str]
 
@@ -277,12 +278,20 @@ def create_app(engine=None, *, clock=time.monotonic, ttl=SESSION_TTL, ai_timeout
         except TimeoutError:
             raise APIError("ai_timeout", "The evaluator took too long. Please try again; this attempt was not counted.", 504) from None
 
+    def extract_owner_token(request: Request) -> str | None:
+        auth = request.headers.get("authorization", "").strip()
+        if auth.lower().startswith("bearer "):
+            token = auth[7:].strip()
+            if token:
+                return token
+        return request.cookies.get(AUTH_COOKIE)
+
     def get_session(sid: str, request: Request) -> Session:
         purge()
         if sid not in sessions:
             raise APIError("session_expired", "This session has expired. Please start again.", 410)
         session = sessions[sid]
-        token = request.cookies.get(AUTH_COOKIE)
+        token = extract_owner_token(request)
         if not token or not secrets.compare_digest(token, session.owner_token):
             raise APIError("unauthorized_session", "Session access denied.", 403)
         return session
@@ -295,7 +304,7 @@ def create_app(engine=None, *, clock=time.monotonic, ttl=SESSION_TTL, ai_timeout
         if not model_id:
             raise APIError("email_not_allowed", "Access denied. This email is not on the allowlist.", 403)
         reply = await call_ai(engine.initial())
-        existing_token = request.cookies.get(AUTH_COOKIE)
+        existing_token = extract_owner_token(request)
         token = existing_token if existing_token else secrets.token_urlsafe(32)
         sid = secrets.token_urlsafe(32)
         sessions[sid] = Session(
@@ -306,7 +315,7 @@ def create_app(engine=None, *, clock=time.monotonic, ttl=SESSION_TTL, ai_timeout
             model_id=model_id,
             owner_token=token,
         )
-        if not existing_token:
+        if request.cookies.get(AUTH_COOKIE) != token:
             response.set_cookie(
                 key=AUTH_COOKIE,
                 value=token,
@@ -314,7 +323,7 @@ def create_app(engine=None, *, clock=time.monotonic, ttl=SESSION_TTL, ai_timeout
                 samesite="strict",
                 path="/api",
             )
-        return StartResponse(session_id=sid, model_id=model_id, instructions=reply.result.feedback)
+        return StartResponse(session_id=sid, model_id=model_id, owner_token=token, instructions=reply.result.feedback)
 
     @app.post("/api/sessions/{sid}/drawings", response_model=VerdictResponse)
     async def submit(sid: str, body: DrawingSubmission, request: Request):
@@ -361,7 +370,7 @@ def create_app(engine=None, *, clock=time.monotonic, ttl=SESSION_TTL, ai_timeout
     async def delete(sid: str, request: Request):
         session = sessions.get(sid)
         if session:
-            token = request.cookies.get(AUTH_COOKIE)
+            token = extract_owner_token(request)
             if not token or not secrets.compare_digest(token, session.owner_token):
                 raise APIError("unauthorized_session", "Session access denied.", 403)
             if session.lock.locked():
@@ -374,4 +383,5 @@ def create_app(engine=None, *, clock=time.monotonic, ttl=SESSION_TTL, ai_timeout
         return FileResponse(ROOT / "static" / "index.html")
 
     app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
+    app.mount("/", StaticFiles(directory=ROOT / "static", html=True), name="root_static")
     return app

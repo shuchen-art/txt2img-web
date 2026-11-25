@@ -4,3 +4,5 @@ allowlist.csv
 __pycache__/
 .pytest_cache/
 *.pyc
+worker/node_modules/
+worker/.wrangler/
