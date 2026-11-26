@@ -3,6 +3,7 @@
 const $ = (id) => document.getElementById(id);
 const canvas = $("canvas");
 const context = canvas.getContext("2d");
+const drawingInk = getComputedStyle(document.documentElement).getPropertyValue("--ink-primary").trim();
 const editorEl = $("editor");
 const editorDockEl = $("editor-dock");
 const placeholderEl = $("placeholder");
@@ -213,8 +214,8 @@ async function revealNewContent(anchor) {
 function paint() {
   context.fillStyle = "#ffffff";
   context.fillRect(0, 0, canvas.width, canvas.height);
-  context.strokeStyle = "#171716";
-  context.fillStyle = "#171716";
+  context.strokeStyle = drawingInk;
+  context.fillStyle = drawingInk;
   context.lineWidth = 5.3;
   context.lineCap = "round";
   context.lineJoin = "round";
