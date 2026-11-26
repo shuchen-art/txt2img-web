@@ -7,13 +7,13 @@
 }
 
 :root {
-  --paper-surface: #e2e8ed;
-  --paper-thermal-stock: #f5f8fa;
-  --paper-placeholder-fill: #e7edf1;
-  --paper-edge-stroke: #c7d2da;
-  --ink-primary: #202f3c;
-  --ink-secondary: #516574;
-  --ink-faint: #96a6b1;
+  --paper-surface: #e8e9e8;
+  --paper-thermal-stock: #f8f8f6;
+  --paper-placeholder-fill: #eceeed;
+  --paper-edge-stroke: #d4d8d8;
+  --ink-primary: #282d2f;
+  --ink-secondary: #5b6265;
+  --ink-faint: #a2a8a9;
 
   color-scheme: light;
   font-family: "PT Mono", monospace;
