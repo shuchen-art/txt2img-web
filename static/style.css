@@ -7,18 +7,18 @@
 }
 
 :root {
-  --paper-surface: #e8e9e8;
-  --paper-thermal-stock: #f8f8f6;
-  --paper-placeholder-fill: #eceeed;
-  --paper-edge-stroke: #d4d8d8;
-  --ink-primary: #282d2f;
-  --ink-secondary: #5b6265;
-  --ink-faint: #a2a8a9;
+  --paper-surface: #F5F5F5;
+  --paper-thermal-stock: #FFFFFF;
+  --paper-placeholder-fill: var(--paper-surface);
+  --paper-edge-stroke: #E5E5E5;
+  --ink-primary: #141414;
+  --ink-secondary: #666666;
+  --ink-body: #292929;
 
   color-scheme: light;
   font-family: "PT Mono", monospace;
   font-synthesis: none;
-  color: var(--ink-primary);
+  color: var(--ink-body);
   background: var(--paper-surface);
 }
 
@@ -31,7 +31,7 @@ body {
   padding: 24px 16px 48px;
   min-height: 100vh;
   background: var(--paper-surface);
-  color: var(--ink-primary);
+  color: var(--ink-body);
 }
 
 button {
@@ -171,7 +171,7 @@ canvas:focus-visible {
 
 .meta-value {
   margin: 0;
-  color: var(--ink-primary);
+  color: var(--ink-body);
   text-align: right;
   overflow-wrap: anywhere;
 }
@@ -240,7 +240,7 @@ canvas:focus-visible {
   padding: 2px 0 2px 14px;
   font-size: 15px;
   line-height: 23px;
-  color: var(--ink-primary);
+  color: var(--ink-body);
   overflow-wrap: anywhere;
   scroll-margin-top: 24px;
 }
@@ -290,7 +290,7 @@ canvas:focus-visible {
 .capture-frame {
   position: absolute;
   inset: 0;
-  border: 1px dashed var(--ink-faint);
+  border: 1px dashed var(--ink-secondary);
   pointer-events: none;
   z-index: 2;
 }
@@ -436,7 +436,7 @@ canvas.drawable {
   border: 1px solid var(--ink-primary);
   border-radius: 0;
   background: var(--paper-thermal-stock);
-  color: var(--ink-primary);
+  color: var(--ink-body);
   font: inherit;
   font-size: 13px;
   line-height: 20px;
@@ -452,7 +452,7 @@ canvas.drawable {
 }
 
 .email-input:disabled {
-  border-color: var(--ink-faint);
+  border-color: var(--ink-secondary);
   color: var(--ink-secondary);
   background: var(--paper-placeholder-fill);
 }
@@ -466,7 +466,7 @@ canvas.drawable {
   border-left-width: 3px;
   font-size: 12px;
   line-height: 18px;
-  color: var(--ink-primary);
+  color: var(--ink-body);
   overflow-wrap: anywhere;
 }
 
@@ -517,8 +517,8 @@ canvas.drawable {
 }
 
 .tool-button:disabled {
-  border-color: var(--ink-faint);
-  color: var(--ink-faint);
+  border-color: var(--ink-secondary);
+  color: var(--ink-secondary);
   text-decoration: line-through;
 }
 
@@ -544,8 +544,8 @@ canvas.drawable {
 
 .primary-button:disabled {
   background: var(--paper-placeholder-fill);
-  border-color: var(--ink-faint);
-  color: var(--ink-faint);
+  border-color: var(--ink-secondary);
+  color: var(--ink-secondary);
   text-decoration: line-through;
 }
 
@@ -569,7 +569,7 @@ canvas.drawable {
   padding: 10px 14px;
   border: 1px dashed var(--ink-secondary);
   background: var(--paper-placeholder-fill);
-  color: var(--ink-primary);
+  color: var(--ink-body);
   font-size: 12px;
   line-height: 1.5;
 }
